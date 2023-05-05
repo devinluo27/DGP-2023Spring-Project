@@ -19,6 +19,7 @@ class RayPredictor(nn.Module):
         else:
             self.input_mlp = None
 
+        # RayEncoder is NOT Learnable
         self.query_encoder = RayEncoder(pos_octaves=15, pos_start_octave=pos_start_octave,
                                         ray_octaves=15)
         self.transformer = Transformer(180, depth=num_att_blocks, heads=12, dim_head=z_dim // 12,

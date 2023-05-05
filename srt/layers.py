@@ -42,13 +42,14 @@ class RayEncoder(nn.Module):
         if len(rays.shape) == 4:
             batchsize, height, width, dims = rays.shape
             pos_enc = self.pos_encoding(pos.unsqueeze(1))
-            pos_enc = pos_enc.view(batchsize, pos_enc.shape[-1], 1, 1)
-            pos_enc = pos_enc.repeat(1, 1, height, width)
-            rays = rays.flatten(1, 2)
+            pos_enc = pos_enc.view(batchsize, pos_enc.shape[-1], 1, 1) # B, dim_pos, 1, 1
+            pos_enc = pos_enc.repeat(1, 1, height, width)  # B, dim_pos, H, W
+            rays = rays.flatten(1, 2) # B, H*W, dims
 
             ray_enc = self.ray_encoding(rays)
             ray_enc = ray_enc.view(batchsize, height, width, ray_enc.shape[-1])
-            ray_enc = ray_enc.permute((0, 3, 1, 2))
+            ray_enc = ray_enc.permute((0, 3, 1, 2)) # B, dim_ray, H, W
+            # B, dim_ray + dim_pos, H, W
             x = torch.cat((pos_enc, ray_enc), 1)
         else:
             pos_enc = self.pos_encoding(pos)
