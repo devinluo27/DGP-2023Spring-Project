@@ -1,9 +1,13 @@
 import numpy as np
 import trimesh
 import os
+import shutil
 import argparse
 import json
 import open3d as o3d
+import pyrender
+import matplotlib.pyplot as plt
+import cv2
 from multiprocessing import Pool
 from pysdf import SDF
 from skimage.measure import marching_cubes
@@ -17,18 +21,87 @@ class sampler:
         self.start = args.start
         self.end = args.end
         self.size = 1
+        self.output_dir = args.write_dir
         assert self.end - self.start >= self.size
     
     def run_sampler(self):
-        counter = 0
+        #counter = 0
         for i in self.instance_list[self.start:self.end]:
-            obj_path = os.path.join(self.class_dir, i)
-            mesh_vertices, mesh_faces, obj_mesh = self.load_object(obj_path)
-            if not obj_mesh.is_watertight:
-                continue
-            counter += 1
-            print(counter)
-            #self.sample_data(i)
+            try:
+                self.sample_data(i, False)
+            except:
+                path = os.path.join(self.output_dir, i)
+                if not os.path.exists(path):
+                    shutil.rmtree(path)
+
+    def normalize_vector(self, vector):
+        return vector / (np.linalg.norm(vector))
+
+    # https://learnopengl.com/Getting-started/Camera
+    def get_pose(self, position_vector, front_vector, up_vector):
+        m1 = np.eye(4)
+        m2 = np.eye(4)
+        
+        # look at
+        z = self.normalize_vector(front_vector)
+        # up 
+        y = self.normalize_vector(up_vector)
+        # right
+        x = self.normalize_vector(np.cross(y, z))
+        # up
+        y = self.normalize_vector(np.cross(z, x))
+       
+        m1[0, :3] = x
+        m1[1, :3] = y
+        m1[2, :3] = z
+        m1[3, 3] = 1.0
+
+        m2[0, 0] = m2[1, 1] = m2[2, 2] = 1.0
+        m2[:3, 3] = -position_vector
+        m2[3, 3] = 1.0
+
+        return np.linalg.inv(np.matmul(m1, m2))
+
+    def render_image(self, py_mesh, instance):
+        
+        points = np.array([[1, 1, 1], 
+                          [1, 1, -1], 
+                          [1, -1, 1], 
+                          [-1, 1, 1], 
+                          [-1, -1, 1], 
+                          [-1, 1, -1], 
+                          [1, -1, -1], 
+                          [-1, -1, -1]])
+        
+        py_mesh = pyrender.Mesh.from_trimesh(py_mesh, smooth=False)
+        
+        for i, pos in enumerate(points):
+            scene = pyrender.Scene(ambient_light=[.1, .1, .3], bg_color=[1., 1., 1.])
+            camera = pyrender.PerspectiveCamera(yfov=np.pi/3.0)
+            light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=2.)
+            light2 = pyrender.PointLight(color=[1.0, 1.0, 1.0], intensity=10.)
+
+            scene.add(py_mesh, pose =  np.eye(4))
+            scene.add(light, pose = np.eye(4))
+            scene.add(light2, pose = np.array([[1., 0., 0., 0], 
+                                               [0., 1., 0., 3], 
+                                               [0., 0., 1., 0], 
+                                               [0., 0., 0., 1.]]))
+            scene.add(light2, pose = np.array([[1., 0., 0., 0], 
+                                               [0., 1., 0., -3], 
+                                               [0., 0., 1., 0], 
+                                               [0., 0., 0., 1.]]))
+            mat = self.get_pose(pos, pos, np.array([0., 1., 0.]))
+            scene.add(camera, pose=mat)
+            # render scene
+            flags = pyrender.constants.RenderFlags.SKIP_CULL_FACES
+            r = pyrender.OffscreenRenderer(128, 128)
+            color, _ = r.render(scene, flags=flags)
+            path = os.path.join(self.output_dir, instance)
+
+            if not os.path.exists(path):
+                os.makedirs(path)
+            cv2.imwrite(os.path.join(path, f"{i:02d}.png"), color)   
 
     def sample_data(self, instance, gui=False):
         obj_path = os.path.join(self.class_dir, instance)
@@ -37,14 +110,22 @@ class sampler:
             return False
         if gui:
             obj_mesh.show()
-        xyz = self.sample_points(10)
+        # render image
+        self.render_image(obj_mesh, instance)
+        # sample points sdf
+        xyz = self.sample_points(10000)
         if gui:
             pts = trimesh.points.PointCloud(xyz)
             pts.show()
-        #sdf_est = SDF(mesh_vertices, mesh_faces)
-        #sdf = sdf_est(xyz)       
+        sdf_est = SDF(mesh_vertices, mesh_faces)
+        sdf = sdf_est(xyz)
+        query = np.concatenate((xyz, np.array([sdf]).reshape(-1, 1)), -1)
+        path = os.path.join(self.output_dir, instance) 
+        if not os.path.exists(path):
+            os.makedirs(path)    
+        np.save(os.path.join(path, 'xyzsdf.npy'), query) 
         #print(sdf)
-        self.marching_cube(mesh_vertices, mesh_faces)
+        #self.marching_cube(mesh_vertices, mesh_faces)
 
     def marching_cube(self, mesh_vertices, mesh_faces, res=256):
         # sample xyz from grid
@@ -87,7 +168,7 @@ class sampler:
         xyz = np.squeeze(np.stack((x, y, z), axis=1))
         return xyz
     
-    # from NeurlODF
+    # from NeurlODFscene_or_mesh
     def as_mesh(self, scene_or_mesh):
         """
         Convert a possible scene to a mesh.
@@ -109,7 +190,6 @@ class sampler:
 
     def load_object(self, object_path):
         obj_file = os.path.join(object_path, "models", "model_normalized.obj")
-
         obj_mesh = trimesh.load_mesh(obj_file)
         obj_mesh = self.as_mesh(obj_mesh)  
         ## deepsdf normalization
