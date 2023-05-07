@@ -6,10 +6,17 @@ from torch.utils.data import Dataset
 import os
 
 from srt.utils.nerf import transform_points
+config_dict = {
+    'imgs_per_scene': 8,
+    'imgs_sample_per_scene': 6,
+    'sdf_per_scene': 20000,
+    'sdf_sample_per_scene': 5000,
+}
 
 class ShapeNetDataset(Dataset):
     def __init__(self, path, mode, points_per_item=2048, max_len=None,
-                 canonical_view=True, full_scale=False, imgs_per_scene=6):
+                 canonical_view=True, full_scale=False, config_dict=config_dict
+                ):
         """ Loads the NMR dataset as found at
         https://s3.eu-central-1.amazonaws.com/avg-projects/differentiable_volumetric_rendering/data/NMR_Dataset.zip
         Hosted by Niemeyer et al. (https://github.com/autonomousvision/differentiable_volumetric_rendering)
@@ -28,11 +35,18 @@ class ShapeNetDataset(Dataset):
         self.max_len = max_len
         self.canonical = canonical_view
         self.full_scale = full_scale
-        self.imgs_per_scene = imgs_per_scene
+        self.imgs_per_scene = config_dict['imgs_per_scene']
+        self.imgs_sample_per_scene = config_dict['imgs_sample_per_scene']
+        self.sdf_per_scene = config_dict['sdf_per_scene']
+        self.sdf_sample_per_scene = config_dict['sdf_sample_per_scene']
+        self.imgs_idx_arr = np.arange(self.imgs_sample_per_scene)
 
         print('[ShapeNetDataset] path', path)
 
-        self.scene_paths = os.listdir(path)
+        # reproducibilityss
+        self.scene_paths = sorted(os.listdir(path))
+        self._load_sdf()
+
 
         # with open(os.path.join(path, 'metadata.yaml'), 'r') as f:
         #     metadata = yaml.load(f, Loader=yaml.CLoader)
@@ -47,8 +61,8 @@ class ShapeNetDataset(Dataset):
         #     cur_scene_paths = [os.path.join(class_id, scene_id) for scene_id in cur_scene_ids]
         #     self.scene_paths.extend(cur_scene_paths)
             
-        # self.num_scenes = len(self.scene_paths)
-        # print(f'NMR {mode} dataset loaded: {self.num_scenes} scenes.')
+        self.num_scenes = len(self.scene_paths)
+        print(f'ShapeNetDataset {mode} dataset loaded: {self.num_scenes} scenes.')
 
         # self.render_kwargs = {
         #     'min_dist': 2.,
@@ -61,15 +75,60 @@ class ShapeNetDataset(Dataset):
         #                          [0, 0, -1, 0],
         #                          [0, 1, 0, 0],
         #                          [0, 0, 0, 1]])
+    def _load_sdf(self):
+        """load all sdf into dict"""
+        # key: '1d99f...', value: a numpy arr (20000, 4)
+        self.sdf_dict = {}
+        for p in self.scene_paths:
+            sdf_path = os.path.join(self.path, p, 'xyzsdf.npy')
+            self.sdf_dict[p] = np.load(sdf_path).astype(np.float32)
 
     def __len__(self):
         if self.max_len is not None:
             return self.max_len
-        return self.num_scenes * 24
-
+        return self.num_scenes
 
 
     def __getitem__(self, idx):
+        
+        # randomly select 6 out of 8 images
+        scene_idx = idx
+        load_imgs_idx = np.random.choice(self.imgs_idx_arr, size=self.imgs_sample_per_scene, replace=False)
+
+        # get file path to a scene
+        scene_path = os.path.join(self.path, self.scene_paths[scene_idx])
+        # load 6 images
+        images = [np.asarray(imageio.imread(
+            os.path.join(scene_path, f'{i:02d}.png'))) for i in load_imgs_idx]
+
+        images = np.stack(images, 0).astype(np.float32) / 255.
+        # print('images', images.shape) images (6, 128, 128, 3)
+        input_image = np.transpose(images, (0, 3, 1, 2))
+        # print('input_image', input_image.shape) # input_image (6, 3, 128, 128)
+
+        load_sdf_idx = np.random.choice(self.sdf_per_scene, size=self.sdf_sample_per_scene, replace=False)
+        # original: [20000, 4] -> [5000?, 4]
+        xyz_sdf = self.sdf_dict[self.scene_paths[scene_idx]][load_sdf_idx, :]
+
+
+
+
+        result = {
+            'input_images':      input_image,              # [6, 3, h, w]
+            'xyz_sdf': xyz_sdf,
+            # 'input_camera_pos':  np.expand_dims(camera_pos[view_idx], 0),     # [1, 3]
+            # 'input_rays':        np.expand_dims(rays[view_idx], 0),           # [1, h, w, 3]
+            # 'target_pixels':     pixels_sel,                                  # [p, 3]
+            # 'target_camera_pos': cpos_sel,                                    # [p, 3]
+            # 'target_rays':       rays_sel,                                    # [p, 3]
+            'sceneid':           idx,                                         # int
+        }
+
+        # if self.canonical:
+            # result['transform'] = canonical_extrinsic                         # [3, 4] (optional)
+
+        return result
+
 
 
 
