@@ -113,13 +113,21 @@ class sampler:
         # render image
         self.render_image(obj_mesh, instance)
         # sample points sdf
-        xyz = self.sample_points(10000)
+        xyz = self.sample_points(500000)
         if gui:
             pts = trimesh.points.PointCloud(xyz)
             pts.show()
         sdf_est = SDF(mesh_vertices, mesh_faces)
-        sdf = sdf_est(xyz)
+        sdf = sdf_est(xyz)        
         query = np.concatenate((xyz, np.array([sdf]).reshape(-1, 1)), -1)
+
+        query_pos = query[query[:,3]>0]
+        query_neg = query[query[:,3]<=0]
+        pos_size = 10000
+        query_pos = query_pos[:pos_size, :]
+        query_neg = query_neg[:20000-len(query_pos), :]
+        query = np.concatenate([query_pos, query_neg], axis=0)
+        print(query.shape, len(query_pos), len(query_neg))
         path = os.path.join(self.output_dir, instance) 
         if not os.path.exists(path):
             os.makedirs(path)    
@@ -136,7 +144,7 @@ class sampler:
         # get sdf
         sdf_est = SDF(mesh_vertices, mesh_faces)
         sdf = sdf_est(xyz) 
-
+ 
         # make implicit value
         threshold = 0
         implicit_values = sdf.reshape(res, res, res)
@@ -209,7 +217,7 @@ if __name__=="__main__":
     # 03001627:chair
     parser.add_argument("--subdir", default="03001627", type=str, help="The object id")
     parser.add_argument("--cpu", default=4, type=int, help="cpu pool size")
-    parser.add_argument("--write-dir", default="/gpfs/data/ssrinath/projects/stnerf/DGP/ShapeNetDGP/")
+    parser.add_argument("--write-dir", default="/gpfs/data/ssrinath/projects/stnerf/DGP/ShapeNetDGPV2/")
     parser.add_argument("--start", default=0, type=int, help="start from file i")
     parser.add_argument("--end", default=10000, type=int, help="end at file i")
     args = parser.parse_args()
