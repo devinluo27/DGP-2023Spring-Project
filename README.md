@@ -4,7 +4,8 @@ In this project, we aim to learn a neural network that takes images as input and
 
 we use a backbone network based on SRT[1]. 
 
-For more deatails, please refer to the [slides](https://docs.google.com/presentation/d/1ihUECglqh9L3kH-jz0aKBGTOO0TUBvqEoZ90e_3d2s0/).
+For more deatails, please refer to the [slides](https://docs.google.com/presentation/d/1ihUECglqh9L3kH-jz0aKBGTOO0TUBvqEoZ90e_3d2s0/). You can also download a single mesh overfitting result [here](vis/overfit_1ee92a9d78cccbda98d2e7dbe701ca48.stl) and a generalization result [here](vis/gen_2e5e60f57621c1e7480c54eaada840a1.stl).
+
 
 
 ## Running Experiments
