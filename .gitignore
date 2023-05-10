@@ -1,5 +1,8 @@
 *.pt
 .ipynb_checkpoints
-data
-runs
+
+# runs
+*.stl
 *__pycache__
+luotest*
+data/*
