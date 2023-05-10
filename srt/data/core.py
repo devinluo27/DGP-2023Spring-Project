@@ -4,8 +4,14 @@ import os
 
 from srt import data
 
+input_config_dict = {
+    'imgs_per_scene': 8,
+    'imgs_sample_per_scene': 8,
+    # 'sdf_per_scene': 20000, # to be inferred when loading
+    'sdf_sample_per_scene': 5000,
+}
 
-def get_dataset(mode, cfg, max_len=None, full_scale=False):
+def get_dataset(mode, cfg, max_len=None, full_scale=False, config_dict={}):
     ''' Returns a dataset.
     Args:
         mode: Dataset split, 'train', 'val', or 'test'
@@ -39,6 +45,14 @@ def get_dataset(mode, cfg, max_len=None, full_scale=False):
     elif dataset_type == 'obsurf_msn':
         dataset = data.Clevr3dDataset(dataset_folder, mode, points_per_item=points_per_item,
                                       shapenet=True, max_len=max_len, full_scale=full_scale, **kwargs)
+    # elif dataset_type in ['shapenet_chair138', 'shapenet_chair2']:
+    elif 'shapenet' in dataset_type.lower():
+        input_config_dict.update(config_dict)
+        input_config_dict['dataset_type'] = dataset_type
+        dataset = data.ShapeNetDataset(dataset_folder, mode, points_per_item=points_per_item,
+                                      max_len=max_len, full_scale=full_scale,
+                                      config_dict=input_config_dict,
+                                      **kwargs)
     else:
         raise ValueError('Invalid dataset "{}"'.format(cfg['dataset']))
 

@@ -6,16 +6,10 @@ from torch.utils.data import Dataset
 import os
 
 from srt.utils.nerf import transform_points
-config_dict = {
-    'imgs_per_scene': 8,
-    'imgs_sample_per_scene': 6,
-    'sdf_per_scene': 20000,
-    'sdf_sample_per_scene': 5000,
-}
 
 class ShapeNetDataset(Dataset):
     def __init__(self, path, mode, points_per_item=2048, max_len=None,
-                 canonical_view=True, full_scale=False, config_dict=config_dict
+                 canonical_view=True, full_scale=False, config_dict=None
                 ):
         """ Loads the NMR dataset as found at
         https://s3.eu-central-1.amazonaws.com/avg-projects/differentiable_volumetric_rendering/data/NMR_Dataset.zip
@@ -37,14 +31,34 @@ class ShapeNetDataset(Dataset):
         self.full_scale = full_scale
         self.imgs_per_scene = config_dict['imgs_per_scene']
         self.imgs_sample_per_scene = config_dict['imgs_sample_per_scene']
-        self.sdf_per_scene = config_dict['sdf_per_scene']
-        self.sdf_sample_per_scene = config_dict['sdf_sample_per_scene']
+        # self.sdf_per_scene = config_dict['sdf_per_scene']
+        # print(self.path)
+        # exit()
+        if self.mode == 'train':
+            self.sdf_sample_per_scene = config_dict['sdf_sample_per_scene']
+        else:
+            # === 20000 when eval
+            val_path = self.path + '_val'
+            if os.path.isdir(val_path):
+                self.path = val_path
+                print('use separate val path\n')
+            # 2x sample when evaluating
+            self.sdf_sample_per_scene = config_dict['sdf_sample_per_scene'] * 2
+
         self.imgs_idx_arr = np.arange(self.imgs_sample_per_scene)
+        self.posneg_equal_sampling = True
+
+        self.positive_ratio = 0.5
+        self.n_positive = int(self.sdf_sample_per_scene * self.positive_ratio)
+        self.n_neg = self.sdf_sample_per_scene - self.n_positive
+        print("config_dict", config_dict)
+        self.truncate_sdf = config_dict.get('truncate_sdf', False)
+
 
         print('[ShapeNetDataset] path', path)
 
         # reproducibilityss
-        self.scene_paths = sorted(os.listdir(path))
+        self.scene_paths = sorted(os.listdir(self.path))
         self._load_sdf()
 
 
@@ -64,24 +78,32 @@ class ShapeNetDataset(Dataset):
         self.num_scenes = len(self.scene_paths)
         print(f'ShapeNetDataset {mode} dataset loaded: {self.num_scenes} scenes.')
 
-        # self.render_kwargs = {
-        #     'min_dist': 2.,
-        #     'max_dist': 4.}
 
-        # # Rotation matrix making z=0 is the ground plane.
-        # # Ensures that the scenes are layed out in the same way as the other datasets,
-        # # which is convenient for visualization.
-        # self.rot_mat = np.array([[1, 0, 0, 0],
-        #                          [0, 0, -1, 0],
-        #                          [0, 1, 0, 0],
-        #                          [0, 0, 0, 1]])
     def _load_sdf(self):
         """load all sdf into dict"""
         # key: '1d99f...', value: a numpy arr (20000, 4)
         self.sdf_dict = {}
-        for p in self.scene_paths:
-            sdf_path = os.path.join(self.path, p, 'xyzsdf.npy')
-            self.sdf_dict[p] = np.load(sdf_path).astype(np.float32)
+        self.sdf_positive_dict = {}
+        self.sdf_neg_dict = {}
+
+        if self.mode == 'infer_no_gt':
+            raise FileNotFoundError()
+        else:
+            for p in self.scene_paths:
+                sdf_path = os.path.join(self.path, p, 'xyzsdf.npy')
+                self.sdf_dict[p] = np.load(sdf_path).astype(np.float32)
+                if getattr(self, "sdf_per_scene", False):
+                    self.sdf_per_scene = self.sdf_dict[p].shape[0]
+                else:
+                    assert self.sdf_per_scene == self.sdf_dict[p].shape[0], "number of points doesn't match"
+                # TODO Truncate SDF?
+                # if self.truncate_sdf:
+                    # self.sdf_dict[p] 
+                self.sdf_positive_dict[p] = self.sdf_dict[p][self.sdf_dict[p][:, 3] > 0]
+                self.sdf_neg_dict[p] = self.sdf_dict[p][self.sdf_dict[p][:, 3] <= 0]
+
+                print('self.sdf_positive_dict[p]', len(self.sdf_positive_dict[p]), self.sdf_per_scene) # 10000, v2 even sampling pos/neg
+
 
     def __len__(self):
         if self.max_len is not None:
@@ -97,18 +119,38 @@ class ShapeNetDataset(Dataset):
 
         # get file path to a scene
         scene_path = os.path.join(self.path, self.scene_paths[scene_idx])
-        # load 6 images
+        # load 6/8 images
         images = [np.asarray(imageio.imread(
             os.path.join(scene_path, f'{i:02d}.png'))) for i in load_imgs_idx]
-
+        # print('image', images[0].max()) max: 255
         images = np.stack(images, 0).astype(np.float32) / 255.
         # print('images', images.shape) images (6, 128, 128, 3)
         input_image = np.transpose(images, (0, 3, 1, 2))
         # print('input_image', input_image.shape) # input_image (6, 3, 128, 128)
 
-        load_sdf_idx = np.random.choice(self.sdf_per_scene, size=self.sdf_sample_per_scene, replace=False)
-        # original: [20000, 4] -> [5000?, 4]
-        xyz_sdf = self.sdf_dict[self.scene_paths[scene_idx]][load_sdf_idx, :]
+
+        
+        # sample SDF original: [20000, 4] -> [5000?, 4]
+        if self.posneg_equal_sampling:
+            pos = self.sdf_positive_dict[self.scene_paths[scene_idx]]
+            # print('pos', pos.shape) # 870, 4
+
+            xyz_sdf_pos = np.random.choice(pos.shape[0], size=self.n_positive, replace=True)
+            pos = pos[xyz_sdf_pos, :]
+
+            neg = self.sdf_neg_dict[self.scene_paths[scene_idx]]
+            xyz_sdf_neg = np.random.choice(neg.shape[0], size=self.n_neg, replace=False)
+            neg = neg[xyz_sdf_neg, :]
+
+            xyz_sdf = np.concatenate([pos, neg], axis=0)
+            np.random.shuffle(xyz_sdf)
+            
+            # print('xyz_sdf', xyz_sdf.shape) # (5000, 4)
+            
+
+        else:
+            load_sdf_idx = np.random.choice(self.sdf_per_scene, size=self.sdf_sample_per_scene, replace=False)
+            xyz_sdf = self.sdf_dict[self.scene_paths[scene_idx]][load_sdf_idx, :]
 
 
 
@@ -116,100 +158,9 @@ class ShapeNetDataset(Dataset):
         result = {
             'input_images':      input_image,              # [6, 3, h, w]
             'xyz_sdf': xyz_sdf,
-            # 'input_camera_pos':  np.expand_dims(camera_pos[view_idx], 0),     # [1, 3]
-            # 'input_rays':        np.expand_dims(rays[view_idx], 0),           # [1, h, w, 3]
-            # 'target_pixels':     pixels_sel,                                  # [p, 3]
-            # 'target_camera_pos': cpos_sel,                                    # [p, 3]
-            # 'target_rays':       rays_sel,                                    # [p, 3]
-            'sceneid':           idx,                                         # int
+            'sceneid':       idx,                             # int
+            'scene_paths': self.scene_paths[idx], # path name
         }
 
-        # if self.canonical:
-            # result['transform'] = canonical_extrinsic                         # [3, 4] (optional)
 
         return result
-
-
-
-
-  
-        
-        scene_idx = idx % self.num_scenes
-        view_idx = idx // self.num_scenes
-        target_views = np.array(list(set(range(24)) - set([view_idx])))
-
-        scene_path = os.path.join(self.path, self.scene_paths[scene_idx])
-        images = [np.asarray(imageio.imread(
-            os.path.join(scene_path, 'image', f'{i:04d}.png'))) for i in range(24)]
-        images = np.stack(images, 0).astype(np.float32) / 255.
-        input_image = np.transpose(images[view_idx], (2, 0, 1))
-
-        cameras = np.load(os.path.join(scene_path, 'cameras.npz'))
-        cameras = {k: v for k, v in cameras.items()}  # Load all matrices into memory
-
-        for i in range(24): # Apply rotation matrix to rotate coordinate system
-            cameras[f'world_mat_inv_{i}'] = self.rot_mat @ cameras[f'world_mat_inv_{i}'] 
-            # The transpose here is not technically necessary, since the rotation matrix is symmetric
-            cameras[f'world_mat_{i}'] =  cameras[f'world_mat_{i}'] @ np.transpose(self.rot_mat)
-
-        rays = []
-        height = width = 64
-
-        xmap = np.linspace(-1, 1, width)
-        ymap = np.linspace(-1, 1, height)
-        xmap, ymap = np.meshgrid(xmap, ymap)
-
-        for i in range(24):
-            cur_rays = np.stack((xmap, ymap, np.ones_like(xmap)), -1)
-            cur_rays = transform_points(cur_rays,
-                                        cameras[f'world_mat_inv_{i}'] @ cameras[f'camera_mat_inv_{i}'],
-                                        translate=False)
-            cur_rays = cur_rays[..., :3]
-            cur_rays = cur_rays / np.linalg.norm(cur_rays, axis=-1, keepdims=True)
-            rays.append(cur_rays)
-            
-        rays = np.stack(rays, axis=0).astype(np.float32)
-        camera_pos = [cameras[f'world_mat_inv_{i}'][:3, -1] for i in range(24)]
-        camera_pos = np.stack(camera_pos, axis=0).astype(np.float32)
-        # camera_pos and rays are now in world coordinates.
-
-        if self.canonical:  # Transform to canonical camera coordinates
-            canonical_extrinsic = cameras[f'world_mat_{view_idx}'].astype(np.float32)
-            camera_pos = transform_points(camera_pos, canonical_extrinsic)
-            rays = transform_points(rays, canonical_extrinsic, translate=False)
-
-        rays_flat = np.reshape(rays[target_views], (-1, 3))
-        pixels_flat = np.reshape(images[target_views], (-1, 3))
-        cpos_flat = np.tile(np.expand_dims(camera_pos[target_views], 1), (1, height * width, 1))
-        cpos_flat = np.reshape(cpos_flat, (len(target_views) * height * width, 3))
-        num_points = rays_flat.shape[0]
-
-        if not self.full_scale:
-            replace = num_points < self.points_per_item
-            sampled_idxs = np.random.choice(np.arange(num_points),
-                                            size=(self.points_per_item,),
-                                            replace=replace)
-
-            rays_sel = rays_flat[sampled_idxs]
-            pixels_sel = pixels_flat[sampled_idxs]
-            cpos_sel = cpos_flat[sampled_idxs]
-        else:
-            rays_sel = rays_flat
-            pixels_sel = pixels_flat
-            cpos_sel = cpos_flat
-
-        result = {
-            'input_images':      np.expand_dims(input_image, 0),              # [1, 3, h, w]
-            'input_camera_pos':  np.expand_dims(camera_pos[view_idx], 0),     # [1, 3]
-            'input_rays':        np.expand_dims(rays[view_idx], 0),           # [1, h, w, 3]
-            'target_pixels':     pixels_sel,                                  # [p, 3]
-            'target_camera_pos': cpos_sel,                                    # [p, 3]
-            'target_rays':       rays_sel,                                    # [p, 3]
-            'sceneid':           idx,                                         # int
-        }
-
-        if self.canonical:
-            result['transform'] = canonical_extrinsic                         # [3, 4] (optional)
-
-        return result
-
