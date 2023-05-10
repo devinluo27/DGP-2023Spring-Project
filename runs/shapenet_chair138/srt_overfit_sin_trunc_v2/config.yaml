@@ -1,0 +1,32 @@
+
+data:
+  dataset: shapenetv2_chair1
+  num_points: 8192
+model:
+  encoder: sdf_isrt
+  encoder_kwargs:
+    pos_start_octave: -5
+  decoder: sdf
+  decoder_kwargs:
+    pos_start_octave: -5
+    posemb_type: sin
+
+
+
+training:
+  sdf_kwargs:
+    truncate_sdf: True
+    sdf_thres: 0.25
+
+  num_workers: 12
+  batch_size: 2
+  model_selection_metric: psnr
+  model_selection_mode: maximize
+  print_every: 10
+  visualize_every: 5000
+  validate_every: 5000
+  checkpoint_every: 1000
+  backup_every: 100000
+  max_it: 4000000
+  decay_it: 4000000
+  lr_warmup: 2500
