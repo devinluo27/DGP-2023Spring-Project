@@ -7,8 +7,14 @@ alias python=python3
 
 # export config="runs/shapenet_chair138/srt/config_luotest.yaml"
 # export config="runs/shapenet_chair138/srt_overfit_sin/config.yaml"
+# export config="runs/shapenet_chair138/srt_overfit_sin_trunc_v2_run4/config.yaml"
 # export config="runs/shapenet_chair138/srt_overfit_sin_trunc_v2_run4_chair3/config.yaml"
-export config="runs/shapenet_chair138/srt_overfit_sin_trunc_v2_run4_chair2/config.yaml"
+# export config="runs/shapenet_chair138/srt_overfit_sin_trunc_v2_run4_chair2/config.yaml"
+
+# export config="runs/shapenet_chair138/srt_overfit_sin_trunc_v2/config.yaml"
+
+export config="runs/shapenet_chair138/srt_gen_sin_trunc_v3/config.yaml"
+
 
 
 
