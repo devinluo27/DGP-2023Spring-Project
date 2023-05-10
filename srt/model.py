@@ -1,7 +1,7 @@
 from torch import nn
 
-from srt.encoder import SRTEncoder, ImprovedSRTEncoder
-from srt.decoder import SRTDecoder, ImprovedSRTDecoder, NerfDecoder
+from srt.encoder import SRTEncoder, ImprovedSRTEncoder, SdfImprovedSRTEncoder
+from srt.decoder import SRTDecoder, ImprovedSRTDecoder, NerfDecoder, SdfDecoder
 
 class SRT(nn.Module):
     def __init__(self, cfg):
@@ -9,15 +9,22 @@ class SRT(nn.Module):
 
         if 'encoder' in cfg and cfg['encoder'] == 'isrt':
             self.encoder = ImprovedSRTEncoder(**cfg['encoder_kwargs'])
+        if 'encoder' in cfg and cfg['encoder'] == 'sdf_isrt':
+            print('***Constructing SdfImprovedSRTEncoder',)
+            self.encoder = SdfImprovedSRTEncoder(**cfg['encoder_kwargs'])
+
         else:  # We leave the SRTEncoder as default for backwards compatibility
             self.encoder = SRTEncoder(**cfg['encoder_kwargs'])
 
         if cfg['decoder'] == 'lightfield':
             self.decoder = SRTDecoder(**cfg['decoder_kwargs'])
-        elif cfg['encoder'] == 'isrt':
+        elif cfg['decoder'] == 'isrt':
             self.decoder = ImprovedSRTDecoder(**cfg['decoder_kwargs'])
         elif cfg['decoder'] == 'nerf':
             self.decoder = NerfDecoder(**cfg['decoder_kwargs'])
+        elif cfg['decoder'] == 'sdf':
+            print('***Constructing SdfDecoder',)
+            self.decoder = SdfDecoder(**cfg['decoder_kwargs'])
         else:
             raise ValueError('Unknown decoder type', cfg['decoder'])
 

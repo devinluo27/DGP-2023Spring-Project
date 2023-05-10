@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from srt.layers import RayEncoder, Transformer, PositionalEncoding
+from srt.layers import XYZEncoder
 from srt.utils import nerf
 
 
@@ -89,6 +90,82 @@ class ImprovedSRTDecoder(nn.Module):
         pixels = self.render_mlp(x)
         return pixels, {}
 
+class XYZPredictor(nn.Module):
+    def __init__(self, num_att_blocks=2, pos_start_octave=0, out_dims=3,
+                 z_dim=384, input_mlp=False, output_mlp=True, posemb_type='sin'):
+        super().__init__()
+
+        # shrink mlp hidden size
+        self.xyz_enc_dim = 90
+        if input_mlp:  # Input MLP added with OSRT improvements
+            self.input_mlp = nn.Sequential(
+                # original:180, pos90+ray90
+                nn.Linear(self.xyz_enc_dim , 180),
+                nn.ReLU(),
+                nn.Linear(180, self.xyz_enc_dim))
+        else:
+            self.input_mlp = None
+
+        # RayEncoder is NOT Learnable, output dim: 90
+        self.query_encoder = XYZEncoder(pos_octaves=15, pos_start_octave=pos_start_octave,
+                                        ray_octaves=15, posemb_type=posemb_type)
+        self.transformer = Transformer(self.xyz_enc_dim , depth=num_att_blocks, heads=12, dim_head=z_dim // 12,
+                                       mlp_dim=z_dim * 2, selfatt=False, kv_dim=z_dim)
+
+        if output_mlp:
+            self.output_mlp = nn.Sequential(
+                nn.Linear(self.xyz_enc_dim , 64),
+                nn.ReLU(),
+                nn.Linear(64, out_dims))
+        else:
+            self.output_mlp = None
+
+    def forward(self, z, xyz, rays=None):
+        """
+        Args:
+            z: scene encoding [batch_size, num_patches, patch_dim]
+            x: query camera positions [batch_size, num_rays, 3]
+            rays: query ray directions [batch_size, num_rays, 3]
+        """
+        queries = self.query_encoder(xyz)
+        # z torch.Size([2, 1536, 384]) XYZPredictor queries torch.Size([2, 5000, 90]) torch.float32 cuda:0
+        # print('queries', queries[0, 1000:1005, :5]) # No Problem
+        # print('z',z.shape, 'XYZPredictor queries', queries.shape, queries.dtype, queries.device)
+
+        if self.input_mlp is not None:
+            queries = self.input_mlp(queries)
+
+        output = self.transformer(queries, z)
+        if self.output_mlp is not None:
+            output = self.output_mlp(output)
+        return output
+
+class SdfDecoder(nn.Module):
+    """ Scene Representation Transformer Decoder with the improvements from Appendix A.4 in the OSRT paper."""
+    def __init__(self, num_att_blocks=2, pos_start_octave=0, posemb_type='sin'):
+        super().__init__()
+        print('posemb_type', posemb_type)
+        self.allocation_transformer = XYZPredictor(num_att_blocks=num_att_blocks,
+                                                   pos_start_octave=pos_start_octave,
+                                                   z_dim=384,
+                                                #    z_dim=768,
+                                                   input_mlp=True, output_mlp=False, posemb_type=posemb_type)
+        hidden_size = 180
+        self.render_mlp = nn.Sequential(
+            # xyz_enc_size = 90, not 180
+            nn.Linear(90, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            # TODO could add more layer here
+            nn.Linear(hidden_size, 1),
+        )
+
+    def forward(self, z, xyz, **kwargs):
+        # cross attention: z: img feature;; x: query xyz
+        x = self.allocation_transformer(z, xyz,)
+        pixels = self.render_mlp(x)
+        return pixels, {}
 
 class NerfNet(nn.Module):
     def __init__(self, num_att_blocks=2, pos_start_octave=0):

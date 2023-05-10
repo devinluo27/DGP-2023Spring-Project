@@ -58,6 +58,31 @@ class RayEncoder(nn.Module):
 
         return x
 
+class XYZEncoder(nn.Module):
+    def __init__(self, pos_octaves=8, pos_start_octave=0, posemb_type='sin', ray_octaves=4, ray_start_octave=0):
+        super().__init__()
+        self.posemb_type = posemb_type
+        self.xyz_encoding = PositionalEncoding(num_octaves=pos_octaves, start_octave=pos_start_octave)
+        # self.ray_encoding = PositionalEncoding(num_octaves=ray_octaves, start_octave=ray_start_octave)
+
+    def forward(self, xyz):
+        """
+        input x,y,z: (batch_size, n_sdf, 3);
+        output encoded pos: (batch_size, n_sdf, dim);
+        """
+        if self.posemb_type == 'sin':
+            xyz_enc = self.xyz_encoding(xyz)
+        elif self.posemb_type == 'pad':
+            xyz_enc = torch.zeros_like(xyz_enc)
+            xyz_enc[:, :, :3] = xyz
+        else:
+            assert False
+
+        # xyz_enc torch.Size([2, 5000, 90])
+        # print('xyz_enc', xyz_enc.shape)
+        return xyz_enc
+
+
 
 # Transformer implementation based on ViT
 # https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/vit.py

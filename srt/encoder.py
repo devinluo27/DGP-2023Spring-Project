@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from srt.layers import RayEncoder, Transformer
+from srt.layers import XYZEncoder
 
 import math
 
@@ -149,6 +150,56 @@ class ImprovedSRTEncoder(nn.Module):
         x = x.reshape(batch_size, num_images * patches_per_image, channels_per_patch)
 
         x = self.transformer(x)
+
+        return x
+
+
+
+class SdfImprovedSRTEncoder(nn.Module):
+    """
+    Scene Representation Transformer Encoder with the improvements from Appendix A.4 in the OSRT paper.
+    """
+    def __init__(self, num_conv_blocks=3, num_att_blocks=5, pos_start_octave=0):
+        super().__init__()
+
+        conv_blocks = [SRTConvBlock(idim=3, hdim=96)]
+        cur_hdim = 192
+        for i in range(1, num_conv_blocks):
+            conv_blocks.append(SRTConvBlock(idim=cur_hdim, odim=None))
+            cur_hdim *= 2
+
+        self.conv_blocks = nn.Sequential(*conv_blocks)
+
+        self.per_patch_linear = nn.Conv2d(cur_hdim, 384, kernel_size=1)
+
+        # shrink transformer input_dim and num_heads
+        self.transformer = Transformer(384, depth=num_att_blocks, heads=6, dim_head=64,
+                                       mlp_dim=768, selfatt=True)
+
+    def forward(self, images, xyz=None):
+        """
+        Args:
+            images: [batch_size, num_images, 3, height, width]. Assume the first image is canonical.
+            xyz:  [batch_size, num_images, 3]
+            camera_pos: [batch_size, num_images, 3]
+            rays: [batch_size, num_images, height, width, 3]
+        Returns:
+            scene representation: [batch_size, num_patches, channels_per_patch]
+        """
+
+        batch_size, num_images = images.shape[:2]
+
+        x = images.flatten(0, 1)
+
+        x = self.conv_blocks(x)
+        x = self.per_patch_linear(x)
+        x = x.flatten(2, 3).permute(0, 2, 1)
+
+        patches_per_image, channels_per_patch = x.shape[1:]
+        x = x.reshape(batch_size, num_images * patches_per_image, channels_per_patch)
+
+        x = self.transformer(x)
+        # print('encoder out x', x.shape) # torch.Size([2, 1536, 384])
 
         return x
 
