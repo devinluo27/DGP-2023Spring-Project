@@ -46,6 +46,8 @@ if __name__ == '__main__':
     parser.add_argument('--full-scale', action='store_true', help='Evaluate on full images.')
     parser.add_argument('--print-model', action='store_true', help='Print model and parameters on startup.')
     parser.add_argument('--rtpt', type=str, help='Use rtpt to set process name with given initials.')
+    parser.add_argument('--local_rank', '--local-rank', type=int, help='')
+
 
     args = parser.parse_args()
     with open(args.config, 'r') as f:
@@ -149,28 +151,30 @@ if __name__ == '__main__':
 
     decay_it = cfg['training']['decay_it'] if 'decay_it' in cfg['training'] else 4000000
 
-    lr_scheduler = LrScheduler(peak_lr=1e-5, peak_it=peak_it, decay_it=decay_it, decay_rate=0.16)
+    peak_lr = float(cfg['training'].get('peak_lr', 1e-5))
+    print('peak_lr', peak_lr)
+    lr_scheduler = LrScheduler(peak_lr=peak_lr, peak_it=peak_it, decay_it=decay_it, decay_rate=0.16)
 
     # Intialize training
     optimizer = optim.Adam(model.parameters(), lr=lr_scheduler.get_cur_lr(0))
     # train_dataset.render_kwargs
-    trainer = SRTTrainer_sdf(model, optimizer, cfg, device, out_dir, sdf_kwargs=None)
+    trainer = SRTTrainer_sdf(model, optimizer, cfg, device, out_dir, sdf_kwargs=cfg['training']['sdf_kwargs'])
     checkpoint = Checkpoint(out_dir, device=device, encoder=encoder_module,
                             decoder=decoder_module, optimizer=optimizer)
 
 
     # TODO disable
-    if False:
-        # Try to automatically resume
-        try:
-            if os.path.exists(os.path.join(out_dir, f'model_{max_it}.pt')):
-                load_dict = checkpoint.load(f'model_{max_it}.pt')
-            else:
-                load_dict = checkpoint.load('model.pt')
-        except FileNotFoundError:
-            load_dict = dict()
-    else:
-        load_dict = {}
+    ## if False:
+    # Try to automatically resume
+    try:
+        if os.path.exists(os.path.join(out_dir, f'model_{max_it}.pt')):
+            load_dict = checkpoint.load(f'model_{max_it}.pt')
+        else:
+            load_dict = checkpoint.load('model.pt')
+    except FileNotFoundError:
+        load_dict = dict()
+    # else:
+        # load_dict = {}
 
     epoch_it = load_dict.get('epoch_it', -1)
     it = load_dict.get('it', -1)
