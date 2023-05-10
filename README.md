@@ -1,4 +1,4 @@
-# Brown ENG2501 2023 Srping Final Project
+# Brown ENG2501 2023 Spring Final Project
 
 In this project, we aim to learn a neural network that takes images as input and outputs a corresponding mesh.
 
